@@ -1,0 +1,193 @@
+---
+title: "ECON 4341W Data Example"
+author: "Yiyuan He"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc_float: true
+    toc: true
+    number_section: true
+    toc_depth: 4
+    fig_width: 6
+    fig_height: 4
+---
+
+```{r setup, warning = FALSE, results = 'hide'}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(ipumsr)
+library(haven)
+library(spatstat)
+library(tidyverse)
+
+```
+
+# Objective
+
+This file shows that given a dataset that might interest you, what you can explore to understand whether the dataset fits your data. In this file, we mostly follow the practice suggested by "Data: How to Understand Them (Detailed)" section in the slides.
+
+For the example, we use ACS data from 2003 to 2015.
+
+```{r Set directories and import the data}
+ddi <- read_ipums_ddi("usa_00019.xml")
+acs <- read_ipums_micro(ddi)
+
+```
+
+Before starting on further analysis, it would be nice for us to stop and ponder a little:
+
+1.  **What are the samples that we should care about?** Since we are considering people's marriage decision, it might be reasonable for us to focus on people aged between 18 and 65.
+
+```{r age 18-65}
+acs <- acs %>%
+  filter(AGE >= 16 & AGE <= 65)
+
+```
+
+2.  **Are there missing observations in your data?** I am not leading you step by step here, since this requires a back-and-forth between checking the data by yourself and reading the codebook or the documentation of the data.
+    -   For instance, we might want to check a variable, let's say, marital status. It might be the case that we check in R (or any of your favorite data analysis tool) that there are no missing values. Then, you might want to go back to the codebook, and notice that observations with value equal to 9 are actually missing values. Then you clean your data based on this information...
+
+# Basic Information of the data
+
+**1.  What is the unit of observation in your data?**
+
+**Solution.** The units of observation for the American Community Survey (ACS) are individual persons (living in housing units or group quarters) and housing units (whether occupied or vacant)
+
+For what we concern about, we should focus on individual-level data.
+
+**2.  How many observations are in your dataset?**
+
+```{r number of observations}
+cat("There are", nrow(acs), "observations in our data.\n")
+
+count(acs, YEAR)
+
+count(acs, YEAR) %>%
+  ggplot(aes(x = YEAR, y = n)) +
+  geom_col() +
+  labs(
+    x = "Year",
+    y = "Number of observations",
+    title = "Number of observations by year"
+  ) +
+  theme_minimal()
+```
+
+**3.  How many variables are in your dataset?**
+
+```{r Number of Variables}
+cat("There are", length(acs),"variables in my dataset. Details of all variables are shown in the following table.\n")
+
+# Check the details of data using the package
+ipums_var_info(ddi)
+
+```
+
+# Description of Interested Variables
+
+**4.  What is the single most important variable that will be on the left-hand-side of your regression?**
+
+**Solution.** Recall that our example investigates the effect of the Great Recession (2007-2009) on individual's marital status and marital sorting. The second concept requires more treatment on data, so for demonstration purpose, here we ignore the second part, and focus on the first part.
+
+Therefore, the single most important variable that will be on the left-hand-side of our regression is marital status, or the `MARST` variable in our data.
+
+**5.  What is the key right-hand-side variable (or variables) most important for investigating your hypothesis?**
+
+**Solution.** Our key right-hand-side variable is the state-level unemployment percentage rate change during the recession period. Specifically, we define it as
+
+$$
+\% \Delta Unemployment_s = 
+\frac{Unemployment_{s,2010} - Unemployment_{s,2006}}{Unemployment_{s,2006}}.
+$$
+
+I assure you that I construct this variable by myself from this data we are using here, so you should know that you are not *that* constrained by the dataset you have on your hand...
+
+However, I don't want to bother you too much about how to this, at least right now. So, let us pretend that we have the variable already in our dataset.
+
+```{r import unemployment data}
+employ <- read_dta("employment_treatment_state.dta")
+
+acs <- acs %>%
+  left_join(employ, by = c("STATEICP" = "stateicp"))
+
+```
+
+**6.  What other variables do you plan to put on the right-hand-side in order to control for confounding influences?**
+
+**Solution.** Age and education level of individuals matter for their marriage decision. Also, state law variation and the general trend of marriage can matter as well.
+
+# Summary Statistics of Interested Variables
+
+**7.  What is the mean of your left-hand-side variable? What is the range of this variable?**
+
+**Solution.** We first investigate the variable `MARST`. Since our variable here is categorical rather than continuous, we check its definition for each categories and its overall distribution, instead of calculating the mean.
+
+Notice that we are dealing with survey data, so it is important for us to consider the survey weight during calculation. For now, we are doing a preliminary data check, so I ignore this part.
+
+```{r LHS}
+# label
+cat("The label of `MARST` is shown as follows:\n")
+attr(acs$MARST, "labels")
+
+cat("The distribution of `MARST` is shown as follows:")
+hist(acs$MARST)
+
+```
+
+As we have an initial idea on this variable, it seeems to be natural for us to start wondering: how would this distribution differ across age group? How about education group?
+
+Also, it seems that some dimensions contain little observation. In response to this, do we want to reduce the dimensions of the variable? Shall we consider convert this variable into a binary variable, such as "whether people are married"?
+
+As an example, we construct this "married" variable as follows:
+
+(i) it equals to 1 if people are married (`MARST` == 1 or `MARST` == 2), and
+(ii) it equals to 0 otherwise.
+
+```{r married rate}
+acs <- acs %>%
+  mutate(
+    married = case_when(
+      MARST == 1 ~ 1,
+      MARST == 2 ~ 1,
+      TRUE ~ 0
+    )
+  )
+```
+
+We can further check the mean and the distribution of the new variables. Notice that since our variable now becomes binary, its mean actually has an interpretation: it means the percentage of married people over the entire population.
+
+```{r married rate, stats}
+cat("The mean of `married` is", mean(acs$married))
+
+barplot(
+  table(acs$married),
+  xlab = "Married or Not",
+  ylab = "Count"
+)
+
+```
+
+**8.  Give the same information for the right-hand-side variables.**
+
+**Solution.**
+
+For Questions 8 and 9, I only show the result for my key right-hand-side variable as an example. For your practice, you might want to do these exercises for all right-hand-side variables to understand more about your data.
+
+The summary statistics of our right-hand-side variable (i.e., the state-level percentage change of unemployment rate) is shown as follows.
+
+```{r RHS information}
+summary(acs$per_change)
+
+```
+
+**9.  What is the correlation between your left-hand-side variable and the key right-hand-side variable?**
+
+```{r correlation}
+
+cat("The correlation between the left-hand-side variable and the key right-hand-side variable is", 
+    round(cor(acs$married, acs$per_change), 4)
+    )
+
+```
